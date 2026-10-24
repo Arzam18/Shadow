@@ -21,17 +21,21 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Install Android NDK
-        uses: android-actions/setup-ndk@v3
-        with:
-          ndk-version: "27.2.12479018"
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
       - name: Build Shadow for Android arm64-v8a
         shell: bash
         run: |
           set -euo pipefail
-          NDK_HOST="linux-x86_64"
-          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$NDK_HOST/bin"
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           CXX="$TOOLCHAIN/aarch64-linux-android24-clang++"
 
           test -x "$CXX"
@@ -60,18 +64,18 @@ jobs:
           if [ -f quantised.bin ]; then
             cp quantised.bin dist/
           else
-            echo "quantised.bin is not in this repository; the engine will need its compatible NNUE network supplied separately unless nnue_data.h embeds it."
+            echo "quantised.bin is not in this repository; the engine may need its compatible NNUE network supplied separately unless nnue_data.h embeds it."
           fi
           if [ -f nnue_data.h ]; then
             echo "Embedded NNUE header exists in source."
           fi
-          cat > dist/README.txt <<'EOF'
+          cat > dist/README.txt <<'EOF_README'
           Shadow Android ARM64 build
           Target: Android arm64-v8a (API 24+)
           CPU: ARMv8-A with NEON/Advanced SIMD enabled
           Run from a terminal or chess GUI that supports UCI.
           If NNUE is not embedded, place the compatible quantised.bin network in the engine's working directory.
-          EOF
+          EOF_README
 
       - name: Upload Android engine
         uses: actions/upload-artifact@v4
