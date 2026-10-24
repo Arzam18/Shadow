@@ -14,15 +14,28 @@ permissions:
 
 jobs:
   build-android:
-    name: Build ARM64 with NEON
+    name: Build ARM64 with NEON and verified NNUE
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # Install the NDK directly; do not run setup-android/sdkmanager,
-      # whose attempt to install the retired "tools" package caused the failure.
+      - name: Verify compatible NNUE is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f src/nnue_data.h ]; then
+            echo "Embedded NNUE header found: src/nnue_data.h"
+          elif [ -f nnue_data.h ]; then
+            echo "Embedded NNUE header found: nnue_data.h"
+          elif [ -f quantised.bin ]; then
+            echo "External NNUE file found: quantised.bin"
+          else
+            echo "::error::No NNUE network found. This source archive does not include quantised.bin or nnue_data.h. Add the compatible network before building; refusing to publish a network-less engine."
+            exit 1
+          fi
+
       - name: Set up Android NDK
         uses: nttld/setup-ndk@v1
         with:
@@ -32,59 +45,54 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}"
           if [ -z "$NDK" ] || [ ! -d "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin" ]; then
-            echo "Android NDK path was not provided by setup-ndk." >&2
-            env | grep -E 'ANDROID_NDK|NDK_HOME' || true
+            echo "::error::Android NDK toolchain was not found."
             exit 1
           fi
-
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           CXX="$TOOLCHAIN/aarch64-linux-android24-clang++"
           test -x "$CXX"
           mkdir -p dist
-
           "$CXX" \
-            -std=c++17 \
-            -O3 \
-            -DNDEBUG \
-            -march=armv8-a+simd \
-            -mtune=cortex-a53 \
-            -flto \
-            -pthread \
-            src/*.cpp \
-            -o dist/Shadow
-
+            -std=c++17 -O3 -DNDEBUG -march=armv8-a+simd -mtune=cortex-a53 \
+            -flto -pthread src/*.cpp -o dist/Shadow
           chmod 755 dist/Shadow
+
           file dist/Shadow
           "$TOOLCHAIN/llvm-readelf" -h dist/Shadow | grep -E 'Class:|Machine:'
-          "$TOOLCHAIN/llvm-readelf" -d dist/Shadow | grep NEEDED || true
+          "$TOOLCHAIN/llvm-readelf" -h dist/Shadow | grep -q 'Machine:.*AArch64'
 
-      - name: Package NNUE network if present
+          if [ -f quantised.bin ]; then
+            cp quantised.bin dist/
+          fi
+
+      - name: Verify engine starts and NNUE loads
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f quantised.bin ]; then
-            cp quantised.bin dist/
-          else
-            echo "quantised.bin is absent. The engine may need its compatible NNUE network supplied separately unless it is embedded in the source."
+          # The source's startup prints an explicit success/failure message.
+          output="$(printf 'uci\nisready\nquit\n' | (cd dist && ./Shadow) 2>&1)"
+          printf '%s\n' "$output"
+          if ! grep -q 'NNUE load success' <<<"$output"; then
+            echo "::error::Engine started without confirming a successful NNUE load."
+            exit 1
           fi
-          if [ -f nnue_data.h ]; then
-            echo "Found nnue_data.h."
-          fi
-          cat > dist/README.txt <<'EOF_README'
+          grep -q 'uciok' <<<"$output"
+          grep -q 'readyok' <<<"$output"
+
+          cat > dist/README.txt <<'EOF'
           Shadow Android ARM64 build
           Target: Android arm64-v8a, API 24+
           CPU: ARMv8-A Advanced SIMD (NEON)
-          The executable is named Shadow. If the NNUE network is not embedded,
-          place the compatible quantised.bin file in the engine's working directory.
-          EOF_README
+          NNUE loading is checked during the build.
+          If quantised.bin is external, keep it beside Shadow in the engine's working directory.
+          EOF
 
-      - name: Upload Android engine
+      - name: Upload verified Android engine
         uses: actions/upload-artifact@v4
         with:
-          name: Shadow-Android-arm64-v8a
+          name: Shadow-Android-arm64-v8a-NNUE
           path: dist/
           if-no-files-found: error
           retention-days: 30
