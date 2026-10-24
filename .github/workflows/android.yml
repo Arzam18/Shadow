@@ -1,0 +1,81 @@
+name: Build Shadow Android ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "src/**"
+      - ".github/workflows/android.yml"
+      - "quantised.bin"
+      - "nnue_data.h"
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    name: Build ARM64 with NEON
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Android NDK
+        uses: android-actions/setup-ndk@v3
+        with:
+          ndk-version: "27.2.12479018"
+
+      - name: Build Shadow for Android arm64-v8a
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK_HOST="linux-x86_64"
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/$NDK_HOST/bin"
+          CXX="$TOOLCHAIN/aarch64-linux-android24-clang++"
+
+          test -x "$CXX"
+          mkdir -p dist
+
+          "$CXX" \
+            -std=c++17 \
+            -O3 \
+            -DNDEBUG \
+            -march=armv8-a+simd \
+            -mtune=cortex-a53 \
+            -flto \
+            -pthread \
+            src/*.cpp \
+            -o dist/Shadow
+
+          chmod 755 dist/Shadow
+          file dist/Shadow
+          readelf -h dist/Shadow | grep -E 'Class:|Machine:'
+          readelf -d dist/Shadow | grep NEEDED || true
+
+      - name: Package NNUE network if present
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f quantised.bin ]; then
+            cp quantised.bin dist/
+          else
+            echo "quantised.bin is not in this repository; the engine will need its compatible NNUE network supplied separately unless nnue_data.h embeds it."
+          fi
+          if [ -f nnue_data.h ]; then
+            echo "Embedded NNUE header exists in source."
+          fi
+          cat > dist/README.txt <<'EOF'
+          Shadow Android ARM64 build
+          Target: Android arm64-v8a (API 24+)
+          CPU: ARMv8-A with NEON/Advanced SIMD enabled
+          Run from a terminal or chess GUI that supports UCI.
+          If NNUE is not embedded, place the compatible quantised.bin network in the engine's working directory.
+          EOF
+
+      - name: Upload Android engine
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shadow-Android-arm64-v8a
+          path: dist/
+          if-no-files-found: error
