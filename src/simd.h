@@ -8,6 +8,10 @@
 #include <immintrin.h>
 #endif
 
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 namespace shadow_simd {
 
     static inline void copy_i16(int16_t* dst, const int16_t* src, std::size_t n) {
@@ -21,6 +25,11 @@ namespace shadow_simd {
 
         for (; i < n; ++i)
             dst[i] = src[i];
+#elif defined(__aarch64__) || defined(__ARM_NEON)
+        std::size_t i = 0;
+        for (; i + 8 <= n; i += 8)
+            vst1q_s16(dst + i, vld1q_s16(src + i));
+        for (; i < n; ++i) dst[i] = src[i];
 #else
         for (std::size_t i = 0; i < n; ++i)
             dst[i] = src[i];
@@ -39,6 +48,11 @@ namespace shadow_simd {
 
         for (; i < n; ++i)
             dst[i] = static_cast<int16_t>(dst[i] + src[i]);
+#elif defined(__aarch64__) || defined(__ARM_NEON)
+        std::size_t i = 0;
+        for (; i + 8 <= n; i += 8)
+            vst1q_s16(dst + i, vaddq_s16(vld1q_s16(dst + i), vld1q_s16(src + i)));
+        for (; i < n; ++i) dst[i] = static_cast<int16_t>(dst[i] + src[i]);
 #else
         for (std::size_t i = 0; i < n; ++i)
             dst[i] = static_cast<int16_t>(dst[i] + src[i]);
@@ -57,6 +71,11 @@ namespace shadow_simd {
 
         for (; i < n; ++i)
             dst[i] = static_cast<int16_t>(dst[i] - src[i]);
+#elif defined(__aarch64__) || defined(__ARM_NEON)
+        std::size_t i = 0;
+        for (; i + 8 <= n; i += 8)
+            vst1q_s16(dst + i, vsubq_s16(vld1q_s16(dst + i), vld1q_s16(src + i)));
+        for (; i < n; ++i) dst[i] = static_cast<int16_t>(dst[i] - src[i]);
 #else
         for (std::size_t i = 0; i < n; ++i)
             dst[i] = static_cast<int16_t>(dst[i] - src[i]);
@@ -78,6 +97,15 @@ namespace shadow_simd {
 
         for (; i < n; ++i)
             dst[i] = static_cast<int16_t>(dst[i] + add[i] - sub[i]);
+#elif defined(__aarch64__) || defined(__ARM_NEON)
+        std::size_t i = 0;
+        for (; i + 8 <= n; i += 8) {
+            int16x8_t d = vld1q_s16(dst + i);
+            d = vaddq_s16(d, vld1q_s16(add + i));
+            d = vsubq_s16(d, vld1q_s16(sub + i));
+            vst1q_s16(dst + i, d);
+        }
+        for (; i < n; ++i) dst[i] = static_cast<int16_t>(dst[i] + add[i] - sub[i]);
 #else
         for (std::size_t i = 0; i < n; ++i)
             dst[i] = static_cast<int16_t>(dst[i] + add[i] - sub[i]);
@@ -186,6 +214,22 @@ namespace shadow_simd {
             for (int f = 0; f < num_features; ++f) {
                 sum += weights[static_cast<std::size_t>(active_features[f]) * hidden_size + i];
             }
+            out_acc[i] = sum;
+        }
+#elif defined(__aarch64__) || defined(__ARM_NEON)
+        std::size_t i = 0;
+        for (; i + 8 <= hidden_size; i += 8) {
+            int16x8_t acc = vld1q_s16(biases + i);
+            for (int f = 0; f < num_features; ++f) {
+                const std::size_t offset = static_cast<std::size_t>(active_features[f]) * hidden_size + i;
+                acc = vaddq_s16(acc, vld1q_s16(weights + offset));
+            }
+            vst1q_s16(out_acc + i, acc);
+        }
+        for (; i < hidden_size; ++i) {
+            int16_t sum = biases[i];
+            for (int f = 0; f < num_features; ++f)
+                sum += weights[static_cast<std::size_t>(active_features[f]) * hidden_size + i];
             out_acc[i] = sum;
         }
 #else
